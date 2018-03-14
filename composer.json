@@ -1,0 +1,15 @@
+{
+  "name": "augustine-institute/flarum-ext-jwt",
+  "license": "proprietary",
+  "description": "A simple jwt decryption extension",
+  "type": "flarum-extension",
+  "require": {
+    "flarum/core": "v0.1.0-beta.7.1",
+    "firebase/php-jwt": "5.0.*"
+  },
+  "extra": {
+    "flarum-extension": {
+      "title": "Flarum JWT Extension"
+    }
+  }
+}
