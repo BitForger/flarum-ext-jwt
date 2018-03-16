@@ -1,0 +1,3 @@
+# flarum-ext-jwt
+
+More info coming soon...
