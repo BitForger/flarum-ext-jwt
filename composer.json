@@ -2,6 +2,7 @@
   "name": "augustineinstitute/flarum-ext-jwt",
   "keywords": ["jwt"],
   "license": "proprietary",
+  "version": "1.0.0",
   "description": "A simple jwt decryption extension",
   "type": "flarum-extension",
   "require": {

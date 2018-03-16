@@ -9,9 +9,7 @@
 
     namespace augustineinstitute\jwt\Listeners;
 
-    use function event;
     use Exception;
-    use Firebase\JWT\BeforeValidException;
     use Firebase\JWT\ExpiredException;
     use Firebase\JWT\JWT;
     use Flarum\Event\ConfigureMiddleware;
@@ -20,10 +18,8 @@
     use Monolog\Handler\FirePHPHandler;
     use Monolog\Handler\StreamHandler;
     use Monolog\Logger;
-    use function print_r;
     use Psr\Http\Message\ResponseInterface as Response;
     use Psr\Http\Message\ServerRequestInterface as Request;
-    use function token_name;
 
     class ConfigureMiddlewareListener
     {
