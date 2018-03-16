@@ -7,6 +7,12 @@
  * @soundtrack California Dreaming - Hollywood Undead
  */
 
-return function () {
-  error_log("hello world");
+namespace augustineinstitute\jwt;
+
+use augustineinstitute\jwt\Listeners;
+use Illuminate\Contracts\Events\Dispatcher;
+
+return function (Dispatcher $events) {
+  $listener = new Listeners\ConfigureMiddlewareListener();
+  $listener->listen($events);
 };

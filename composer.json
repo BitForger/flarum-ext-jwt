@@ -1,15 +1,30 @@
 {
-  "name": "augustine-institute/flarum-ext-jwt",
+  "name": "augustineinstitute/flarum-ext-jwt",
+  "keywords": ["jwt"],
   "license": "proprietary",
   "description": "A simple jwt decryption extension",
   "type": "flarum-extension",
   "require": {
-    "flarum/core": "v0.1.0-beta.7.1",
+    "flarum/core": "0.1.x-dev",
     "firebase/php-jwt": "5.0.*"
   },
+  "repositories": [
+    {
+      "type": "path",
+      "url": "/Users/noahkovacs/Projects/community-formed-org/workbench/*/"
+    }
+  ],
   "extra": {
     "flarum-extension": {
-      "title": "Flarum JWT Extension"
+      "title": "Flarum JWT Extension",
+      "icon": {
+        "backgroundColor": "#24d422"
+      }
+    }
+  },
+  "autoload": {
+    "psr-4": {
+      "augustineinstitute\\jwt\\": "src/"
     }
   }
 }
