@@ -80,11 +80,24 @@
             $this->env = getenv("ENVIRONMENT") ?: "production";
             $this->enforce = getenv("JWT_ENFORCE") ?: true;
 
-            if ($this->applyToAll || ($this->apiOnly && $event->isApi()) || ($this->forumOnly && $event->isForum())) {
-                if ($this->checkCookies && isset($_COOKIE[$this->env . '_formed_org-jwt'])) {
-                    $this->token = $_COOKIE[$this->env . '_formed_org-jwt'];
+            if (($this->applyToAll || ($this->apiOnly && $event->isApi()) || ($this->forumOnly && $event->isForum()))) {
+                if ($this->checkCookies) {
+                    if ($this->env !== "production" && isset($_COOKIE[$this->env . '_formed_org-jwt'])) {
+                        $this->token = $_COOKIE[$this->env . '_formed_org-jwt'];
+                    }
+                    else if (isset($_COOKIE['formed_org-jwt'])) {
+                        $this->token = $_COOKIE['formed_org-jwt'];
+                    }
+                    else {
+                        $this->token = null;
+                    }
                 }
                 $event->pipe(function (Request $request, Response $response, callable $out = null) {
+                    $uri = $request->getServerParams()['REQUEST_URI'];
+                    if ($uri === '/api/token') {
+                        return $out ? $out($request, $response) : $response;
+                    }
+                    $this->logger->notice($uri);
                     if (!$this->token) {
                         $header = $request->getHeaderLine("authorization");
                         $parts = explode(';', $header);
@@ -94,24 +107,28 @@
                         }
                     }
 
-                    if (!$this->token) {
+                    if (!$this->token && $this->enforce && !$uri === '/api/token') {
                         return $response->withStatus(401);
                     }
-                    if (!$this->key) {
+                    if (!$this->key && $this->enforce) {
                         return $response->withStatus(500);
                     }
 
                     try {
                         $jwt = JWT::decode($this->token, $this->key, ['HS256']);
+                        $request->withAttribute("jwt", $this->token)
+                            ->withAttribute("uid", $jwt->uid);
                     }
                     catch (ExpiredException $expiredException) {
-                        return $response->withStatus(401);
+                        if ($this->enforce && !$uri === '/api/token'){
+                            return $response->withStatus(401);
+                        }
                     }
                     catch (Exception $exception) {
-                        return $response->withStatus(500);
+                        if ($this->enforce && !$uri === '/api/token'){
+                            return $response->withStatus(500);
+                        }
                     }
-
-                    $request->withAttribute("jwt", $this->token)->withAttribute("uid", $jwt->uid);
 
                     return $out ? $out($request, $response) : $response;
                 });
