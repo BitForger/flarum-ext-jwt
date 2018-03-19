@@ -101,6 +101,7 @@ This is a fully plug-n-play solution. All that needs to be done is to add the re
 
 ## Usage
 I have created this with some environment variables that can be set to adjust functionality. Here is the list: 
+
 | Variable | Description |
 | --- | --- |
 | API_SECRET | **REQUIRED** This is the secret use on the api to create the JWT token. This must be set |
