@@ -14,12 +14,15 @@
     use Firebase\JWT\JWT;
     use Flarum\Event\ConfigureMiddleware;
     use function getenv;
+    use function gettype;
     use Illuminate\Contracts\Events\Dispatcher;
+    use function log;
     use Monolog\Handler\FirePHPHandler;
     use Monolog\Handler\StreamHandler;
     use Monolog\Logger;
     use Psr\Http\Message\ResponseInterface as Response;
     use Psr\Http\Message\ServerRequestInterface as Request;
+    use function token_name;
 
     class ConfigureMiddlewareListener
     {
@@ -106,8 +109,7 @@
                             $this->token = substr($parts[0], strlen($this->prefix));
                         }
                     }
-
-                    if (!$this->token && $this->enforce && !$uri === '/api/token') {
+                    if (!$this->token && $this->enforce && $uri !== '/api/token') {
                         return $response->withStatus(401);
                     }
                     if (!$this->key && $this->enforce) {
@@ -120,12 +122,12 @@
                             ->withAttribute("uid", $jwt->uid);
                     }
                     catch (ExpiredException $expiredException) {
-                        if ($this->enforce && !$uri === '/api/token'){
+                        if ($this->enforce && $uri !== '/api/token'){
                             return $response->withStatus(401);
                         }
                     }
                     catch (Exception $exception) {
-                        if ($this->enforce && !$uri === '/api/token'){
+                        if ($this->enforce && $uri !== '/api/token'){
                             return $response->withStatus(500);
                         }
                     }
