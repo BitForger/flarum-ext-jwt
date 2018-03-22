@@ -14,15 +14,13 @@
     use Firebase\JWT\JWT;
     use Flarum\Event\ConfigureMiddleware;
     use function getenv;
-    use function gettype;
     use Illuminate\Contracts\Events\Dispatcher;
-    use function log;
+    use function json_encode;
     use Monolog\Handler\FirePHPHandler;
     use Monolog\Handler\StreamHandler;
     use Monolog\Logger;
     use Psr\Http\Message\ResponseInterface as Response;
     use Psr\Http\Message\ServerRequestInterface as Request;
-    use function token_name;
 
     class ConfigureMiddlewareListener
     {
@@ -97,6 +95,9 @@
                 }
                 $event->pipe(function (Request $request, Response $response, callable $out = null) {
                     $uri = $request->getServerParams()['REQUEST_URI'];
+                    $unauthBody = $response->getBody();
+                    $unauthBody->write(json_encode(['authenticated' => false]));
+
                     if ($uri === '/api/token') {
                         return $out ? $out($request, $response) : $response;
                     }
@@ -110,7 +111,9 @@
                         }
                     }
                     if (!$this->token && $this->enforce && $uri !== '/api/token') {
-                        return $response->withStatus(401);
+                        return $response->withStatus(401)
+                            ->withBody($unauthBody)
+                            ->withHeader("Content-Type", "application/json");
                     }
                     if (!$this->key && $this->enforce) {
                         return $response->withStatus(500);
@@ -118,12 +121,14 @@
 
                     try {
                         $jwt = JWT::decode($this->token, $this->key, ['HS256']);
-                        $request->withAttribute("jwt", $this->token)
-                            ->withAttribute("uid", $jwt->uid);
+                        $request = $request->withAttribute("user", ['jwt' => $this->token, 'uid' => $jwt->uid]);
+                        $this->logger->alert($request->getAttribute('jwt'));
                     }
                     catch (ExpiredException $expiredException) {
                         if ($this->enforce && $uri !== '/api/token'){
-                            return $response->withStatus(401);
+                            return $response->withStatus(401)
+                                ->withBody($unauthBody)
+                                ->withHeader("Content-Type", "application/json");
                         }
                     }
                     catch (Exception $exception) {
