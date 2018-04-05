@@ -14,11 +14,18 @@
     use Exception;
     use Firebase\JWT\ExpiredException;
     use Firebase\JWT\JWT;
+    use Firebase\JWT\SignatureInvalidException;
     use Flarum\Core\User;
     use Illuminate\Database\Eloquent\Collection;
+    use function print_r;
     use Psr\Http\Message\ResponseInterface as Response;
     use Psr\Http\Message\ServerRequestInterface as Request;
+    use Psr\Http\Message\StreamInterface;
+    use Symfony\Component\HttpFoundation\Session\SessionInterface;
+    use Zend\Diactoros\Response\RedirectResponse;
     use Zend\Stratigility\MiddlewareInterface;
+    use function getenv;
+    use function time;
 
     class AuthenticateWithJWT implements MiddlewareInterface
     {
@@ -82,10 +89,19 @@
          */
         public function __invoke(Request $request, Response $response, callable $out = null)
         {
+            $env = getenv('ENVIRONMENT');
             $this->key = getenv("API_SECRET");
 
             $uri = $request->getServerParams()['REQUEST_URI'];
             $this->logger->notice($uri);
+
+            $proto = $env === "local" ? "http://" : "https://";
+            $communityUrlBase = $env === "production" ? 'community.formed.org' : "community." . $env . ".formed.org";
+            $communityUrl = $proto . $communityUrlBase . $uri;
+
+            $formedUrlBase = $env === "production" ? 'formed.org/login?url=' . $communityUrl : $env . '.formed.org/login?url=' . $communityUrl;
+            $formedUrlBase = $env === "local" ? $env . '.formed.org:3000/login?url=' . $communityUrl : $formedUrlBase;
+            $formedUrl = $proto . $formedUrlBase;
 
             $unauthBody = $response->getBody();
             $unauthBody->write(json_encode(['authenticated' => false]));
@@ -103,36 +119,45 @@
                 }
             }
 
-            if (!$this->token && $this->enforce && $uri !== '/api/token') {
-                return $response->withStatus(401)
-                    ->withBody($unauthBody)
-                    ->withHeader("Content-Type", "application/json");
-            }
-
-            if (!$this->key && $this->enforce) {
-                return $response->withStatus(500);
-            }
-
             try {
-                $jwt = JWT::decode($this->token, $this->key, ['HS256']);
-                $request = $request->withAttribute("user", ['jwt' => $this->token, 'uid' => $jwt->uid]);
+                /**
+                 * @var SessionInterface $session
+                 */
+                $session = $request->getAttribute('session'); // get session
+                $sessionValid = $this->checkSession($session); // verify that it is valid, if not then migrate to new one
+                $request = $request->withAttribute('session', $sessionValid);
 
-                $request = $this->login($request);
-            } catch (ExpiredException $expiredException) {
-                if ($this->enforce && $uri !== '/api/token') {
-                    return $response->withStatus(401)
-                        ->withBody($unauthBody)
-                        ->withHeader("Content-Type", "application/json");
+                // Session doesn't exist so check JWT
+                $valid = $this->verifyKeyAndToken($uri, $response, $unauthBody);
+
+                if ($valid) {
+                    $jwt = JWT::decode($this->token, $this->key, ['HS256']);
+                    $request = $request->withAttribute("user", ['jwt' => $this->token, 'uid' => $jwt->uid]);
+
+                    $request = $this->login($request);
                 }
+                else {
+
+                    $this->logger->debug($formedUrl);
+                    return new RedirectResponse($formedUrl);
+                }
+
+            } catch (ExpiredException $expiredException) {
 
                 $this->logger
                     ->error('Exception Caught: ' . $expiredException->getMessage(), $expiredException->getTrace());
-            } catch (Exception $exception) {
                 if ($this->enforce && $uri !== '/api/token') {
-                    return $response->withStatus(500);
+                    return new RedirectResponse($formedUrl);
                 }
+            } catch (Exception $exception) {
+
                 $this->logger
-                    ->error('Exception Caught: ' . $exception->getMessage(), $exception->getTrace());
+                    ->error('Exception Caught: ' . $exception->getMessage());
+                $this->logger
+                    ->error($exception->getTraceAsString());
+                if ($this->enforce && $uri !== '/api/token') {
+                    return new RedirectResponse($formedUrl);
+                }
             }
 
             return $out ? $out($request, $response) : $response;
@@ -140,13 +165,20 @@
 
         /**
          * @param Request $request
+         * @param bool|SessionInterface $validSession
          * @return Request
          */
         private function login(Request $request): Request
         {
-            $actor = $this->getActor($request->getAttribute('user')['uid']);
+            /**
+             * @var SessionInterface $session
+             */
+            $session = $request->getAttribute('session');
 
-            $actor->setSession($request->getAttribute('session'));
+            $actor = $this->getActor($request->getAttribute('user')['uid']);
+            if ($session) {
+                $actor->setSession($session);
+            }
 
             $request = $request->withAttribute('actor', $actor);
 
@@ -169,5 +201,41 @@
             }
 
             return $a;
+        }
+
+        private function verifyKeyAndToken(string $uri, Response $response, StreamInterface $unauthBody)
+        {
+            if (!$this->token && $this->enforce && $uri !== '/api/token') {
+                return $response->withStatus(401)
+                    ->withBody($unauthBody)
+                    ->withHeader("Content-Type", "application/json");
+            }
+
+            if (!$this->key && $this->enforce) {
+                return $response->withStatus(500);
+            }
+
+            return true;
+        }
+
+        /**
+         * @param SessionInterface $session
+         * @param int $attempts
+         * @return SessionInterface
+         */
+        private function checkSession(SessionInterface $session, $attempts = 0)
+        {
+            if ($session->isStarted()) {
+                $metaBag = $session->getMetadataBag();
+                $created = $metaBag->getCreated();
+                $lifetime = $metaBag->getLifetime();
+                $this->logger->debug($created);
+                $this->logger->debug($lifetime);
+                if (time() > $created + $lifetime && $attempts < 10) {
+                    $session->migrate(true, 21600);
+                    return $this->checkSession($session, $attempts + 1);
+                }
+            }
+            return $session;
         }
     }
