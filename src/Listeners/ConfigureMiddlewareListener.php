@@ -35,6 +35,7 @@
          */
         function listen(Dispatcher $events)
         {
+            $this->logger->debug('listening to events');
             $this->events = $events;
             $events->listen(ConfigureMiddleware::class, [$this, 'handler']);
         }
@@ -56,7 +57,7 @@
          */
         public function handler(ConfigureMiddleware $event)
         {
-
+            $this->logger->debug('event caught');
             $this->apiOnly = getenv("JWT_API_ONLY") ?: false;
             $this->forumOnly = getenv("JWT_FORUM_ONLY") ?: false;
             $this->applyToAll = !$this->apiOnly && !$this->forumOnly;
@@ -76,7 +77,10 @@
                         $this->token = null;
                     }
                 }
-                $authWithJwt = new AuthenticateWithJWT($this->token, $this->enforce);
+
+                $isApi = $event->isApi();
+
+                $authWithJwt = new AuthenticateWithJWT($this->token, $this->enforce, $isApi);
 
                 $event->pipe($authWithJwt);
             }
