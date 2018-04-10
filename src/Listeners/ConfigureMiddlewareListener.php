@@ -12,8 +12,8 @@
     use augustineinstitute\jwt\Middleware\AuthenticateWithJWT;
     use augustineinstitute\jwt\Util\Logger;
     use Flarum\Event\ConfigureMiddleware;
-    use function getenv;
     use Illuminate\Contracts\Events\Dispatcher;
+    use function getenv;
 
     class ConfigureMiddlewareListener
     {
@@ -35,7 +35,6 @@
          */
         function listen(Dispatcher $events)
         {
-            $this->logger->debug('listening to events');
             $this->events = $events;
             $events->listen(ConfigureMiddleware::class, [$this, 'handler']);
         }
@@ -57,7 +56,6 @@
          */
         public function handler(ConfigureMiddleware $event)
         {
-            $this->logger->debug('event caught');
             $this->apiOnly = getenv("JWT_API_ONLY") ?: false;
             $this->forumOnly = getenv("JWT_FORUM_ONLY") ?: false;
             $this->applyToAll = !$this->apiOnly && !$this->forumOnly;
@@ -82,7 +80,7 @@
 
                 $authWithJwt = new AuthenticateWithJWT($this->token, $this->enforce, $isApi);
 
-                $event->pipe($authWithJwt);
+                $event->pipe->pipe('/', $authWithJwt);
             }
 
         }
