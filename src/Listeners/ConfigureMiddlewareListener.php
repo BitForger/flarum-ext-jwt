@@ -12,8 +12,8 @@
     use augustineinstitute\jwt\Middleware\AuthenticateWithJWT;
     use augustineinstitute\jwt\Util\Logger;
     use Flarum\Event\ConfigureMiddleware;
-    use function getenv;
     use Illuminate\Contracts\Events\Dispatcher;
+    use function getenv;
 
     class ConfigureMiddlewareListener
     {
@@ -56,7 +56,6 @@
          */
         public function handler(ConfigureMiddleware $event)
         {
-
             $this->apiOnly = getenv("JWT_API_ONLY") ?: false;
             $this->forumOnly = getenv("JWT_FORUM_ONLY") ?: false;
             $this->applyToAll = !$this->apiOnly && !$this->forumOnly;
@@ -64,7 +63,6 @@
             $this->env = getenv("ENVIRONMENT") ?: "production";
             $this->enforce = getenv("JWT_ENFORCE") ?: true;
 
-            $this->enforce = false;
             if (($this->applyToAll || ($this->apiOnly && $event->isApi()) || ($this->forumOnly && $event->isForum()))) {
                 if ($this->checkCookies) {
                     if ($this->env !== "production" && isset($_COOKIE[$this->env . '_formed_org-jwt'])) {
@@ -75,9 +73,12 @@
                         $this->token = null;
                     }
                 }
-                $authWithJwt = new AuthenticateWithJWT($this->token, $this->enforce);
 
-                $event->pipe($authWithJwt);
+                $isApi = $event->isApi();
+
+                $authWithJwt = new AuthenticateWithJWT($this->token, $this->enforce, $isApi);
+
+                $event->pipe->pipe('/', $authWithJwt);
             }
 
         }

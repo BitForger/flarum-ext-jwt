@@ -15,10 +15,19 @@
     use Firebase\JWT\ExpiredException;
     use Firebase\JWT\JWT;
     use Flarum\Core\User;
+    use Flarum\Http\CookieFactory;
     use Illuminate\Database\Eloquent\Collection;
+    use InvalidArgumentException;
     use Psr\Http\Message\ResponseInterface as Response;
+    use Psr\Http\Message\ServerRequestInterface;
     use Psr\Http\Message\ServerRequestInterface as Request;
+    use Symfony\Component\HttpFoundation\Session\SessionInterface;
+    use Zend\Diactoros\Response\JsonResponse;
+    use Zend\Diactoros\Response\RedirectResponse;
     use Zend\Stratigility\MiddlewareInterface;
+    use function explode;
+    use function getenv;
+    use function time;
 
     class AuthenticateWithJWT implements MiddlewareInterface
     {
@@ -44,15 +53,43 @@
         private $prefix = 'Bearer ';
 
         /**
+         * @var CookieFactory $cookieFactory
+         */
+        private $cookieFactory;
+
+        /**
+         * @var bool $isApi
+         */
+        private $isApi;
+
+        /**
+         * @var string $formedUrl
+         */
+        private $formedUrl;
+
+        /**
+         * @var string $communityUrl
+         */
+        private $communityUrl;
+
+        /**
+         * @var string $loginUrl
+         */
+        private $loginUrl;
+
+        /**
          * AuthenticateWithJWT constructor.
          * @param string|null $token
          * @param bool $enforce
+         * @param bool $isApi
          */
-        public function __construct($token, bool $enforce)
+        public function __construct($token, bool $enforce, bool $isApi)
         {
             $this->logger = new Logger("flarum_jwt_ext");
             $this->token = $token;
             $this->enforce = $enforce;
+//            $this->cookieFactory = $cookieFactory;
+            $this->isApi = $isApi;
         }
 
         /**
@@ -75,64 +112,71 @@
          * Often, middleware will `return $out();`, with the assumption that a
          * later middleware will return a response.
          *
-         * @param Request $request
-         * @param Response $response
+         * @param Request $req
+         * @param Response $res
          * @param null|callable $out
-         * @return null|Response
+         * @return Response|JsonResponse|RedirectResponse
          */
-        public function __invoke(Request $request, Response $response, callable $out = null)
+        public function __invoke(Request $req, Response $res, callable $out = null)
         {
-            $this->key = getenv("API_SECRET");
-
+            $request = $req;
+            $response = $res;
+            $skip = false;
             $uri = $request->getServerParams()['REQUEST_URI'];
             $this->logger->notice($uri);
-
-            $unauthBody = $response->getBody();
-            $unauthBody->write(json_encode(['authenticated' => false]));
-
             if ($uri === '/api/token') {
-                return $out ? $out($request, $response) : $response;
+                $skip = true;
+            }
+            
+            if ($request->getMethod() === "OPTIONS") { // Skip strict check of token on pre-flight requests
+                $skip = true;
             }
 
-            if (!$this->token) {
-                $header = $request->getHeaderLine("authorization");
-                $parts = explode(';', $header);
+            if (!$skip) {
+                $this->key = getenv("API_SECRET");
+                $this->formedUrl = getenv('FORMED_BASE_URI');
+                $this->communityUrl = getenv('FORUM_URL');
 
-                if (isset($parts[0]) && starts_with($parts[0], $this->prefix)) {
-                    $this->token = substr($parts[0], strlen($this->prefix));
-                }
-            }
+                $this->loginUrl = $this->formedUrl . "login?url=".$this->communityUrl.$uri;
 
-            if (!$this->token && $this->enforce && $uri !== '/api/token') {
-                return $response->withStatus(401)
-                    ->withBody($unauthBody)
-                    ->withHeader("Content-Type", "application/json");
-            }
-
-            if (!$this->key && $this->enforce) {
-                return $response->withStatus(500);
-            }
-
-            try {
-                $jwt = JWT::decode($this->token, $this->key, ['HS256']);
-                $request = $request->withAttribute("user", ['jwt' => $this->token, 'uid' => $jwt->uid]);
-
-                $request = $this->login($request);
-            } catch (ExpiredException $expiredException) {
-                if ($this->enforce && $uri !== '/api/token') {
-                    return $response->withStatus(401)
-                        ->withBody($unauthBody)
-                        ->withHeader("Content-Type", "application/json");
+                if (!$this->token) {
+                    $this->getToken($request);
                 }
 
-                $this->logger
-                    ->error('Exception Caught: ' . $expiredException->getMessage(), $expiredException->getTrace());
-            } catch (Exception $exception) {
-                if ($this->enforce && $uri !== '/api/token') {
-                    return $response->withStatus(500);
+                try {
+                    if (!$this->isApi) {
+                        /**
+                         * @var SessionInterface $session
+                         */
+                        $session = $request->getAttribute('session'); // get session
+                        $sessionValid = $this->checkSession($session); // verify that it is valid, if not then migrate to new one
+                        if (!$sessionValid) {
+                            $this->logger->debug('session not valid');
+                            $request = $this->handleToken($request);
+
+                            $request = $this->login($request);
+                        }
+                        else {
+                            $this->logger->debug('session valid');
+                            $request = $request->withAttribute('session', $sessionValid);
+                        }
+                    }
+                    else {
+                        $this->logger->debug('api route');
+                        $request = $this->handleToken($request);
+                    }
+
+                } catch (ExpiredException $expiredException) {
+
+                    $this->logger
+                        ->error('Exception Caught: ', ['exception' => $expiredException->getMessage()]);
+                    return $this->sendError();
+                } catch (Exception $exception) {
+
+                    $this->logger
+                        ->error('Exception Caught: ', ['exception' => $exception->getMessage()]);
+                    return $this->sendError();
                 }
-                $this->logger
-                    ->error('Exception Caught: ' . $exception->getMessage(), $exception->getTrace());
             }
 
             return $out ? $out($request, $response) : $response;
@@ -142,13 +186,21 @@
          * @param Request $request
          * @return Request
          */
-        private function login(Request $request): Request
+        private function login(Request $request)
         {
-            $actor = $this->getActor($request->getAttribute('user')['uid']);
+            $uid = $request->getAttribute('user')['uid'];
+            /**
+             * @var SessionInterface $session
+             */
+            $session = $request->getAttribute('session');
+            if (!$session->has('uid')) {
+                $session->set('uid', $uid);
+            }
 
-            $actor->setSession($request->getAttribute('session'));
-
-            $request = $request->withAttribute('actor', $actor);
+            $actor = $this->getActor($uid);
+            if ($session) {
+                $actor->setSession($session);
+            }
 
             return $request;
         }
@@ -169,5 +221,99 @@
             }
 
             return $a;
+        }
+
+        private function verifyKeyAndToken(bool $isApi)
+        {
+            if ((!$this->token || $this->token === '') && $this->enforce) {
+                if ($isApi) {
+                    return new JsonResponse(['authorized' => false], 401);
+                }
+                else {
+                    throw new InvalidArgumentException();
+                }
+            }
+
+            if (!$this->key && $this->enforce) {
+                if ($isApi) {
+                    return new JsonResponse(['authorized' => false], 500);
+                }
+                else {
+                    throw new InvalidArgumentException();
+                }
+            }
+
+            return true;
+        }
+
+        /**
+         * @param SessionInterface $session
+         * @param int $attempts
+         * @return SessionInterface|bool
+         */
+        private function checkSession(SessionInterface $session, $attempts = 0)
+        {
+            if ($session->isStarted()) {
+                $metaBag = $session->getMetadataBag();
+                $created = $metaBag->getCreated();
+                $lifetime = $metaBag->getLifetime();
+                $uid = $session->get('uid');
+                if (time() > ($created + $lifetime) || !$uid) {
+                    return false;
+                }
+            }
+            return $session;
+        }
+
+        /**
+         * Verify token and secret key, get UID from decrypted token,
+         * place it and user on request
+         * @param ServerRequestInterface $request
+         * @return Request
+         */
+        private function handleToken(Request $request)
+        {
+            // Session doesn't exist so check JWT
+            $valid = $this->verifyKeyAndToken($this->isApi);
+            if ($valid) {
+                $jwt = JWT::decode($this->token, $this->key, ['HS256']);
+
+//                $newSession = $this->startSession($jwt->uid);
+//                $request = $request->withAttribute('session', $newSession);
+                $request = $request->withAttribute('user', ['uid' => $jwt->uid, 'jwt' => $this->token]);
+                $request = $this->addUserToRequest($request, $jwt);
+                return $request;
+            }
+            throw new InvalidArgumentException("Key and Token validation failed");
+        }
+
+        private function sendError()
+        {
+            if (!$this->isApi && $this->enforce) {
+                return new RedirectResponse($this->loginUrl);
+            }
+            else {
+                return new JsonResponse(['authorized' => false], 401);
+            }
+        }
+
+        private function getToken(ServerRequestInterface $request)
+        {
+            $header = $request->getHeader("authorization");
+            $headerValue = $header[0];
+            $headerValueArray = explode(' ', $headerValue);
+            $prefix = $headerValueArray[0];
+            $t = $headerValueArray[1];
+            if (trim(strtolower($this->prefix)) === trim(strtolower($prefix))) {
+                $this->token = $t;
+            }
+        }
+
+        private function addUserToRequest(Request $request, $jwt)
+        {
+            $request->withAttribute("user", ["jwt" => $this->token, "uid" => $jwt->uid]);
+
+            $actor = $this->getActor($jwt->uid);
+            return $request->withAttribute('actor', $actor);
         }
     }

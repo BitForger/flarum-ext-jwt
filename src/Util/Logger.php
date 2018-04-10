@@ -17,7 +17,7 @@
 
     class Logger extends \Monolog\Logger
     {
-        public function __construct(string $name, $handlers = array(), $processors = array())
+        public function __construct($name, $handlers = array(), $processors = array())
         {
             try {
                 array_push($handlers, new StreamHandler("storage/logs/jwt_ext.log", Logger::DEBUG));
