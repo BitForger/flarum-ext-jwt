@@ -63,8 +63,6 @@
             $this->env = getenv("ENVIRONMENT") ?: "production";
             $this->enforce = getenv("JWT_ENFORCE") ?: true;
 
-            // FIXME remove this
-            $this->enforce = true;
             if (($this->applyToAll || ($this->apiOnly && $event->isApi()) || ($this->forumOnly && $event->isForum()))) {
                 if ($this->checkCookies) {
                     if ($this->env !== "production" && isset($_COOKIE[$this->env . '_formed_org-jwt'])) {
